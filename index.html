@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Schiffy Asset Viewer</title>
 <style>
   :root { --ink: #2a2442; --panel: rgba(255, 255, 255, 0.86); --accent: #7fe0d6; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #c3dcf7; font: 14px/1.4 system-ui, sans-serif; color: var(--ink); }
-  canvas { display: block; }
+  /* touch-action none: otherwise a phone takes a finger drag as page scroll/zoom and cancels the pointer (walk stick) */
+  canvas { display: block; touch-action: none; }
+  #hint { pointer-events: none; }
   #ui { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; pointer-events: none; }
   #ui > * { pointer-events: auto; }
   select, button { font: inherit; padding: 6px 10px; border-radius: 10px; border: 2px solid var(--ink); background: var(--panel); color: var(--ink); cursor: pointer; }
@@ -128,7 +130,7 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 </script>
-<script src="walktest.js"></script>
+<script src="walktest.js?v=2"></script><!-- bump ?v= on each change: GitHub Pages caches for 10 min -->
 <script>load(file.value);</script>
 </body>
 </html>

@@ -476,6 +476,9 @@ addEventListener('pointermove', e => {
   cam.yaw -= (e.clientX - drag.x) * 0.006; cam.pitch = Math.max(0.02,Math.min(1.3, cam.pitch + (e.clientY - drag.y) * 0.005));
   drag.x = e.clientX; drag.y = e.clientY;
 });
+// belt and braces for browsers that ignore touch-action: while walking, the page never scrolls or zooms
+for (const t of ['touchstart', 'touchmove'])
+  renderer.domElement.addEventListener(t, e => { if (W.active) e.preventDefault(); }, { passive: false });
 const stickEl = document.createElement('div'), knobEl = document.createElement('div');
 stickEl.style.cssText = `position:fixed;display:none;width:${2 * STICK_R}px;height:${2 * STICK_R}px;border-radius:50%;border:3px solid var(--ink);background:rgba(255,255,255,0.35);pointer-events:none`;
 knobEl.style.cssText = `position:absolute;left:${STICK_R - 24}px;top:${STICK_R - 24}px;width:48px;height:48px;border-radius:50%;background:var(--panel);border:3px solid var(--ink)`;
