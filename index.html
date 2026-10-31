@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schiffy Asset Viewer</title>
+<style>
+  :root { --ink: #2a2442; --panel: rgba(255, 255, 255, 0.86); --accent: #7fe0d6; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #c3dcf7; font: 14px/1.4 system-ui, sans-serif; color: var(--ink); }
+  canvas { display: block; }
+  #ui { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; pointer-events: none; }
+  #ui > * { pointer-events: auto; }
+  select, button { font: inherit; padding: 6px 10px; border-radius: 10px; border: 2px solid var(--ink); background: var(--panel); color: var(--ink); cursor: pointer; }
+  #info { background: var(--panel); border-radius: 10px; padding: 6px 10px; border: 2px solid var(--ink); }
+  #err { position: fixed; bottom: 12px; left: 12px; right: 12px; color: #a0183a; background: var(--panel); padding: 8px; border-radius: 10px; display: none; }
+  #touchUI { position: fixed; right: 16px; bottom: 24px; display: none; flex-direction: column; gap: 12px; }
+  #touchUI button { width: 76px; height: 76px; border-radius: 50%; font-weight: 700; touch-action: none; }
+  @media (pointer: coarse) { #testBtn { display: none !important; } #ui { gap: 6px; } select, button { padding: 8px 10px; } }
+</style>
+</head>
+<body>
+<div id="ui">
+  <select id="file">
+    <option value="glb/elderglow_map.glb">Elderglow Forest (big map)</option>
+    <option value="glb/elderglow_tree.glb">Elderglow: the giant tree + spirit tree</option>
+    <option value="glb/elderglow_faction.glb">Elderglow: 6 big treehouses</option>
+    <option value="glb/elderglow_village.glb">Elderglow: houses + decor</option>
+    <option value="glb/elderglow_land.glb">Elderglow: isles, cliffs, mountains, circus</option>
+    <option value="glb/worldtree_vale.glb">World Tree Vale (scene)</option>
+    <option value="glb/worldtree_kit.glb">World Tree kit (every piece)</option>
+  </select>
+  <button id="ink">Outlines: on</button>
+  <button id="walkBtn" style="display:none">Walk as Schiffy</button>
+  <select id="doorSel" title="Spawn at door" style="display:none"></select>
+  <button id="testBtn" style="display:none">Door walk test</button>
+  <span id="info">loading...</span>
+</div>
+<div id="hint" style="position:fixed;bottom:12px;left:50%;transform:translateX(-50%);display:none;background:var(--panel);border:2px solid var(--ink);border-radius:10px;padding:6px 12px">
+  <span class="keys">WASD / arrows move &middot; Space jump &middot; drag to look &middot; wheel zoom &middot; R respawn &middot; Esc back to orbit</span>
+  <span class="touch" style="display:none">left thumb: move &middot; right side: drag to look</span></div>
+<div id="touchUI"><button id="jumpBtn">Jump</button><button id="backBtn">Back</button></div>
+<div id="err"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/meshoptimizer@0.20.0/meshopt_decoder.js"></script>
+<script>
+// Loads the library's compressed GLBs the way the Schiffy games do (three.js r128 + meshopt) and draws them in the
+// games' toon style: 3-step toon shading, Glow* unlit, Water* see-through, back-face ink hulls.
+// phones: lower pixel ratio and shadow map, outlines off by default (they double the triangles drawn)
+const PHONE = matchMedia('(pointer: coarse)').matches;
+if (PHONE) { document.querySelector('#hint .keys').style.display = 'none'; document.querySelector('#hint .touch').style.display = ''; }
+const renderer = new THREE.WebGLRenderer({ antialias: !PHONE });
+renderer.setPixelRatio(Math.min(devicePixelRatio, PHONE ? 1.5 : 2)); renderer.setSize(innerWidth, innerHeight);
+renderer.outputEncoding = THREE.sRGBEncoding; renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xc3dcf7); scene.fog = new THREE.Fog(0xc3dcf7, 400, 1200);
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.5, 3000);
+const controls = new THREE.OrbitControls(camera, renderer.domElement); controls.enableDamping = true;
+scene.add(new THREE.HemisphereLight(0xeaf4ff, 0x8a7aa8, 0.75));
+const sun = new THREE.DirectionalLight(0xfff4e0, 0.95); sun.position.set(-120, 200, 90); sun.castShadow = true;
+sun.shadow.mapSize.set(PHONE ? 2048 : 4096, PHONE ? 2048 : 4096); Object.assign(sun.shadow.camera, { left: -180, right: 180, top: 180, bottom: -180, near: 10, far: 600 });
+sun.shadow.bias = -0.0006; scene.add(sun);
+const grad = (() => { const d = new Uint8Array([90, 170, 255]); const t = new THREE.DataTexture(d, 3, 1, THREE.LuminanceFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t; })();
+const inkMat = new THREE.MeshBasicMaterial({ color: 0x2a1a22, side: THREE.BackSide });
+inkMat.onBeforeCompile = s => { s.vertexShader = s.vertexShader.replace('#include <begin_vertex>',
+  'vec3 transformed = position + normal * (0.03 + 0.004 * length((modelMatrix * vec4(position, 1.0)).xyz - cameraPosition));'); };
+const matCache = {};
+function toon(m) {
+  if (matCache[m.name]) return matCache[m.name];
+  const c = m.color.clone(); let out;
+  if (m.name.startsWith('Glow')) out = new THREE.MeshBasicMaterial({ color: c });
+  else if (m.name.startsWith('Water')) out = new THREE.MeshToonMaterial({ color: c, gradientMap: grad, transparent: true, opacity: m.opacity < 1 ? m.opacity : 0.8, depthWrite: false });
+  else if (m.name.startsWith('Glass')) out = new THREE.MeshToonMaterial({ color: c, gradientMap: grad, transparent: true, opacity: m.opacity < 1 ? m.opacity : 0.35, depthWrite: false });
+  else out = new THREE.MeshToonMaterial({ color: c, gradientMap: grad });
+  return (matCache[m.name] = out);
+}
+let root = null, inkOn = !PHONE; const inks = [], sway = [];
+ink.textContent = 'Outlines: ' + (inkOn ? 'on' : 'off');
+const loader = new THREE.GLTFLoader(); loader.setMeshoptDecoder(MeshoptDecoder);
+function load(url) {
+  info.textContent = 'loading ' + url + ' ...';
+  if (root) { scene.remove(root); inks.length = 0; sway.length = 0; }
+  const t0 = performance.now();
+  loader.load(url, g => {
+    root = g.scene; let tris = 0, meshes = 0;
+    const kit = /_kit|elderglow_(tree|faction|village|land)/.test(url);
+    if (kit) {   // kit: every piece sits at the origin, so lay them out on a grid, biggest first
+      const items = [...root.children].sort((a, b) => size(b) - size(a)); let x = 0, z = 0, row = 0;
+      for (const o of items) { const s = Math.max(4, size(o)); if (x + s > 260) { x = 0; z += row + 6; row = 0; } o.position.set(x + s / 2, 0, z + s / 2); x += s + 6; row = Math.max(row, s); }
+    }
+    const all = []; root.traverse(o => all.push(o));   // collect first: the ink hulls added below are meshes too
+    root.updateMatrixWorld(true);
+    all.forEach(o => {
+      if (o.name.includes('_canopy')) sway.push({ o, rz: o.rotation.z, rx: o.rotation.x, ph: Math.random() * 6 });
+      if (!o.isMesh) return;
+      meshes++; tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+      o.material = Array.isArray(o.material) ? o.material.map(toon) : toon(o.material);
+      const water = [].concat(o.material).some(m => m.transparent);
+      o.castShadow = !water; o.receiveShadow = true;
+      o.geometry.computeBoundingSphere();
+      if (!water && o.geometry.boundingSphere.radius * o.getWorldScale(new THREE.Vector3()).x > 0.6) {
+        const h = new THREE.Mesh(o.geometry, inkMat); h.castShadow = false; h.visible = inkOn; o.add(h); inks.push(h);
+      }
+    });
+    scene.add(root);
+    const box = new THREE.Box3().setFromObject(root), c = box.getCenter(new THREE.Vector3()), r = box.getSize(new THREE.Vector3()).length() / 2;
+    controls.target.copy(c); camera.position.copy(c).add(new THREE.Vector3(-0.75, 0.55, 0.9).multiplyScalar(r * 1.15));
+    // fog and the sun's shadow box follow the scene size (the big map is ~800 m, the vale ~300 m)
+    scene.fog.near = r * 1.6; scene.fog.far = r * 5; camera.far = r * 8; camera.updateProjectionMatrix();
+    const sc = sun.shadow.camera, s = Math.min(r, 450); Object.assign(sc, { left: -s, right: s, top: s, bottom: -s, far: r * 4 });
+    sun.position.copy(c).add(new THREE.Vector3(-0.5, 1, 0.35).multiplyScalar(r * 1.2)); sun.target.position.copy(c); scene.add(sun.target); sc.updateProjectionMatrix();
+    info.textContent = `${url.split('/').pop()}: ${meshes} meshes, ${(tris / 1000).toFixed(0)}k tris, ${(performance.now() - t0).toFixed(0)} ms`;
+    window.__viewer = { meshes, tris, ok: true };
+    if (window.walk) walk.onLoad();
+  }, p => { if (p.total) info.textContent = `loading ${url.split('/').pop()}: ${Math.round(100 * p.loaded / p.total)}% of ${(p.total / 1e6).toFixed(0)} MB`; }, e => { err.style.display = 'block'; err.textContent = 'Could not load ' + url + ': ' + e.message; window.__viewer = { ok: false, error: String(e.message) }; });
+}
+function size(o) { const b = new THREE.Box3().setFromObject(o).getSize(new THREE.Vector3()); return Math.max(b.x, b.z); }
+file.onchange = () => load(file.value);
+ink.onclick = () => { inkOn = !inkOn; inks.forEach(h => h.visible = inkOn); ink.textContent = 'Outlines: ' + (inkOn ? 'on' : 'off'); };
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const t = clock.getElapsedTime();
+  for (const s of sway) { s.o.rotation.z = s.rz + Math.sin(t * 0.6 + s.ph) * 0.012; s.o.rotation.x = s.rx + Math.cos(t * 0.47 + s.ph) * 0.01; }
+  if (window.walk && walk.active) walk.frame(); else controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+<script src="walktest.js"></script>
+<script>load(file.value);</script>
+</body>
+</html>
